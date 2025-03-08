@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,6 +10,7 @@ import { MockInterview } from "@/utils/schema";
 import { v4 as uuidv4 } from "uuid";
 import { useUser } from "@clerk/nextjs";
 import moment from "moment";
+import { useRouter } from "next/navigation";
 
 import {
   Dialog,
@@ -26,60 +27,73 @@ function AddNewInterview() {
   const [jobDesc, setJobDesc] = useState("");
   const [jobExperience, setJobExperience] = useState("");
   const [loading, setLoading] = useState(false);
-  const [jsonResponse, setjsonResponse] = useState("");
+  const router = useRouter();
   const { user } = useUser();
 
-  const onSubmit = async (e) => {
-    setLoading(true);
-    e.preventDefault();
-    console.log(jobPosition, jobDesc, jobExperience);
+  const onSubmit = useCallback(
+    async (e) => {
+      e.preventDefault();
 
-    const InputPrompt =
-      "Job Position: " +
-      jobPosition +
-      "\n" +
-      "Tech Stack: " +
-      jobDesc +
-      "\n" +
-      "Years of Experience: " +
-      jobExperience +
-      "\n" +
-      "Question Count: " +
-      process.env.NEXT_PUBLIC_INTERVIEW_QUSTION_COUNT +
-      "Questions";
-
-    const result = await chatSession.sendMessage(InputPrompt);
-    const MockJsonResp = result.response
-      .text()
-      .replace("```json```")
-      .replace("```", "");
-    console.log(JSON.parse(MockJsonResp));
-    setjsonResponse(MockJsonResp);
-
-    if (MockJsonResp) {
-      const resp = await db
-        .insert(MockInterview)
-        .values({
-          mockId: uuidv4(),
-          jsonMockResp: MockJsonResp,
-          jobPosition: jobPosition,
-          jobDesc: jobDesc,
-          jobExperience: jobExperience,
-          createdBy: user?.primaryEmailAddress?.emailAddress,
-          createdAt: moment().format("DD-MM-yyyy HH:mm:ss"),
-        })
-        .returning({ mockId: MockInterview.mockId });
-
-      console.log("Inseted ID", resp);
-
-      if (resp) {
-        setOpenDialog(false);
+      if (!jobPosition || !jobDesc || !jobExperience) {
+        alert("Please fill in all fields");
+        return;
       }
-    } else {
-      console.log("Error");
-    }
-    setLoading(false);
-  };
+
+      setLoading(true);
+
+      const inputPrompt = `
+      Job Position: ${jobPosition}
+      Tech Stack: ${jobDesc}
+      Years of Experience: ${jobExperience}
+      Question Count: ${process.env.NEXT_PUBLIC_INTERVIEW_QUESTION_COUNT} Questions
+    `;
+
+      try {
+        const result = await chatSession.sendMessage(inputPrompt);
+        const responseText = (await result.response.text()).replace(
+          /```json|```/g,
+          ""
+        );
+
+        let parsedResponse;
+        try {
+          parsedResponse = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error("Invalid JSON response:", parseError);
+          alert("Received an invalid response. Please try again.");
+          return;
+        }
+
+        const inserted = await db
+          .insert(MockInterview)
+          .values({
+            mockId: uuidv4(),
+            jsonMockResp: parsedResponse,
+            jobPosition,
+            jobDesc,
+            jobExperience,
+            createdBy: user?.primaryEmailAddress?.emailAddress,
+            createdAt: moment().format("DD-MM-yyyy HH:mm:ss"),
+          })
+          .returning({ mockId: MockInterview.mockId });
+
+        if (inserted.length > 0) {
+          setOpenDialog(false);
+          router.push(`/dashboard/interview/${inserted[0].mockId}`);
+        } else {
+          alert("Failed to create interview. Please try again.");
+        }
+      } catch (error) {
+        console.error("Error generating questions:", error);
+        alert(
+          "An error occurred while generating questions. Please try again."
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [jobPosition, jobDesc, jobExperience, user, router]
+  );
 
   return (
     <div>
@@ -89,37 +103,41 @@ function AddNewInterview() {
       >
         <h2 className="text-2xl text-center">+ Add New Interview</h2>
         <p className="text-gray-500 text-center">
-          Start your AI Mockup Interview
+          Start your AI Mock Interview
         </p>
       </div>
       <Dialog open={openDialog} onOpenChange={setOpenDialog}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-2xl">
-              Tell us more about your job interviewing
+              Tell us more about your job interview
             </DialogTitle>
             <DialogDescription>
               <form onSubmit={onSubmit}>
                 <div>
                   <p>
-                    Add Details about your job position/role, Job description
-                    and years of experience
+                    Add details about your job position, description, and
+                    experience.
                   </p>
 
                   <div className="mt-7 my-2">
-                    <label>Job Role/ Job Position</label>
+                    <label>Job Role/ Position</label>
                     <Input
                       placeholder="Ex. Full Stack Developer"
                       required
-                      onChange={(event) => setJobPosition(event.target.value)}
+                      value={jobPosition}
+                      onChange={(e) => setJobPosition(e.target.value)}
+                      disabled={loading}
                     />
                   </div>
-                  <div className="my-3 ">
-                    <label>Job Role/ Tech Stack(In Short)</label>
+                  <div className="my-3">
+                    <label>Tech Stack (In Short)</label>
                     <Textarea
                       placeholder="Ex. React, Angular, Next, Node, MySQL, etc"
                       required
-                      onChange={(event) => setJobDesc(event.target.value)}
+                      value={jobDesc}
+                      onChange={(e) => setJobDesc(e.target.value)}
+                      disabled={loading}
                     />
                   </div>
                   <div className="my-3">
@@ -129,7 +147,9 @@ function AddNewInterview() {
                       type="number"
                       max="100"
                       required
-                      onChange={(event) => setJobExperience(event.target.value)}
+                      value={jobExperience}
+                      onChange={(e) => setJobExperience(e.target.value)}
+                      disabled={loading}
                     />
                   </div>
                 </div>
@@ -138,14 +158,15 @@ function AddNewInterview() {
                     type="button"
                     variant="ghost"
                     onClick={() => setOpenDialog(false)}
+                    disabled={loading}
                   >
                     Cancel
                   </Button>
                   <Button type="submit" disabled={loading}>
                     {loading ? (
                       <>
-                        <LoaderCircle className="animate-spin" /> "Generating AI
-                        Interview"
+                        <LoaderCircle className="animate-spin" /> Generating AI
+                        Interview...
                       </>
                     ) : (
                       "Start Interview"
